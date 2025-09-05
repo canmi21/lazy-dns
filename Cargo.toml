@@ -3,7 +3,12 @@ name = "lazy-dns"
 version = "1.0.1"
 edition = "2024"
 
+[[bin]]
+name = "lazy-dns"
+path = "src/main.rs"
+
 [dependencies]
 dotenvy = "0.15"
 fancy-log = "0.1"
+hickory-proto = "0.25"
 tokio = { version = "1", features = ["full"] }
