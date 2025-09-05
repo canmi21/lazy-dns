@@ -1,6 +1,6 @@
 [package]
 name = "lazy-dns"
-version = "1.0.7"
+version = "1.0.8"
 edition = "2024"
 description = "lazy-dns – A plug-and-play DNS server with auto-reload configs and GeoIP routing. Only A, AAAA, and CNAME are supported; everything else is dropped, by design."
 license = "MIT"
