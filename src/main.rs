@@ -3,6 +3,7 @@
 mod config;
 mod dns_server;
 mod geoip;
+mod records;
 mod resolver;
 
 use crate::config::AppConfig;
@@ -31,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     lazy_motd!();
 
     // --- Load Config ---
-    let config = match AppConfig::load_or_create_default() {
+    let config = match AppConfig::load_from_env() {
         Ok(cfg) => Arc::new(cfg),
         Err(e) => {
             log(LogLevel::Error, &format!("Failed to load config: {}", e));
