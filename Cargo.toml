@@ -2,7 +2,7 @@
 name = "lazy-dns"
 version = "1.0.10"
 edition = "2024"
-description = "lazy-dns – A lazy DNS server with GeoIP routing. Only SOA, NS, A, AAAA, CNAME, MX, and TXT are supported; everything else is dropped, by design."
+description = "A lazy DNS server with GeoIP routing. Only SOA, NS, A, AAAA, CNAME, MX, and TXT are supported; everything else is dropped, by design."
 license = "MIT"
 repository = "https://github.com/canmi21/lazy-dns"
 readme = "README.md"
