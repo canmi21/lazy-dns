@@ -7,6 +7,8 @@ services:
     ports:
       - "53:53/udp"
       - "53:53/tcp"
+    env_file:
+      - ./.env
     volumes:
       - /tmp/lazy-mmdb:/tmp/lazy-mmdb
       - /opt/lazy-dns:/root/lazy-dns
