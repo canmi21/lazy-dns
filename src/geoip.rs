@@ -7,10 +7,12 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tokio::sync::Mutex; // Using tokio's Mutex for async code
+use tokio::sync::Mutex;
 use tokio::time::{Duration, sleep};
 
-const SOCKET_PATH: &str = "/tmp/lazy-mmdb/lazy-mmdb.sock";
+fn get_socket_path() -> String {
+    env::var("GEOIP_SOCKET_PATH").unwrap_or_else(|_| "/tmp/lazy-mmdb.sock".to_string())
+}
 
 #[derive(Debug, Deserialize)]
 struct CountryInfo {
@@ -23,7 +25,6 @@ struct GeoIpResponse {
     country: CountryInfo,
 }
 
-// We no longer store the stream, just a boolean flag indicating availability.
 pub struct GeoIpClient {
     is_available: Arc<Mutex<bool>>,
 }
@@ -35,7 +36,6 @@ impl GeoIpClient {
         }
     }
 
-    /// Spawns a background task to periodically check for service availability.
     pub fn start_reconnect_task(&self) {
         let is_available = self.is_available.clone();
         tokio::spawn(async move {
@@ -44,60 +44,58 @@ impl GeoIpClient {
                 .parse()
                 .unwrap_or(300);
             let check_interval = Duration::from_secs(reconnect_secs);
-
-            // Run an initial check immediately.
-            let mut initial_check = true;
+            let socket_path = get_socket_path();
+            let mut first_run = true;
 
             loop {
-                if !initial_check {
+                if !first_run {
                     sleep(check_interval).await;
                 }
-                initial_check = false;
+                first_run = false;
 
-                // Check if the socket file exists and we can connect.
-                if UnixStream::connect(SOCKET_PATH).await.is_ok() {
-                    let mut avail = is_available.lock().await;
-                    if !*avail {
-                        log(
-                            LogLevel::Info,
-                            "lazy-mmdb service is available. GeoIP enabled.",
-                        );
-                        *avail = true;
+                let mut current_status = is_available.lock().await;
+                match UnixStream::connect(&socket_path).await {
+                    Ok(_) => {
+                        if !*current_status {
+                            log(
+                                LogLevel::Info,
+                                "lazy-mmdb service is available. GeoIP enabled.",
+                            );
+                            *current_status = true;
+                        }
                     }
-                } else {
-                    let mut avail = is_available.lock().await;
-                    if *avail {
-                        log(
-                            LogLevel::Warn,
-                            "lazy-mmdb service has become unavailable. GeoIP disabled.",
-                        );
-                        *avail = false;
-                    } else {
-                        log(
-                            LogLevel::Warn,
-                            &format!(
-                                "lazy-mmdb still unavailable. Retrying in {:?}",
-                                check_interval
-                            ),
-                        );
+                    Err(_) => {
+                        if *current_status {
+                            log(
+                                LogLevel::Warn,
+                                "lazy-mmdb service has become unavailable. GeoIP disabled.",
+                            );
+                            *current_status = false;
+                        } else {
+                            log(
+                                LogLevel::Debug,
+                                &format!(
+                                    "lazy-mmdb still unavailable. Retrying in {:?}",
+                                    check_interval
+                                ),
+                            );
+                        }
                     }
                 }
             }
         });
     }
 
-    /// Looks up the country code for a given IP address by creating a new connection each time.
     pub async fn lookup(&self, ip: IpAddr) -> Option<String> {
-        // Quick check: if the service is marked as unavailable, don't even try to connect.
+        let socket_path = get_socket_path();
+
         if !*self.is_available.lock().await {
             return None;
         }
 
-        // Create a new connection for every lookup.
-        let mut stream = match UnixStream::connect(SOCKET_PATH).await {
+        let mut stream = match UnixStream::connect(&socket_path).await {
             Ok(s) => s,
             Err(_) => {
-                // If connection fails, the service likely went down. Mark it as unavailable.
                 let mut avail = self.is_available.lock().await;
                 if *avail {
                     log(
@@ -115,23 +113,22 @@ impl GeoIpClient {
             ip
         );
 
-        // This is a one-shot connection, so if any I/O fails, we just abandon it.
         if stream.write_all(request.as_bytes()).await.is_err() || stream.flush().await.is_err() {
             return None;
         }
 
         let mut response_buf = [0; 1024];
         if let Ok(n) = stream.read(&mut response_buf).await {
-            let response_str = String::from_utf8_lossy(&response_buf[..n]);
-            if let Some(body) = response_str.split("\r\n\r\n").nth(1) {
+            if let Some(body) = String::from_utf8_lossy(&response_buf[..n])
+                .split("\r\n\r\n")
+                .nth(1)
+            {
                 if let Ok(data) = serde_json::from_str::<GeoIpResponse>(body.trim_end_matches('\0'))
                 {
-                    // Success!
                     return Some(data.country.iso_code);
                 }
             }
         }
-
-        None // Return None on read error or parse error.
+        None
     }
 }
