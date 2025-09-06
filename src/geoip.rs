@@ -10,7 +10,7 @@ use tokio::net::UnixStream;
 use tokio::sync::Mutex; // Using tokio's Mutex for async code
 use tokio::time::{Duration, sleep};
 
-const SOCKET_PATH: &str = "/tmp/lazy-mmdb.sock";
+const SOCKET_PATH: &str = "/tmp/lazy-mmdb/lazy-mmdb.sock";
 
 #[derive(Debug, Deserialize)]
 struct CountryInfo {
