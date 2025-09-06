@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "lazy-dns"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "chrono",
  "dirs",
