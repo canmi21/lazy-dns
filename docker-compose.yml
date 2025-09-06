@@ -2,15 +2,16 @@ services:
   lazy-dns:
     image: canmi/lazy-dns:latest
     container_name: lazy-dns
-    build:
-      context: .
-      dockerfile: Dockerfile
-      platforms:
-        - linux/amd64
+    networks:
+      - internal
     ports:
       - "53:53/udp"
       - "53:53/tcp"
     volumes:
-      - /tmp/lazy-mmdb.sock:/tmp/lazy-mmdb.sock
-      - /root/lazy-dns
+      - /tmp/lazy-mmdb:/tmp/lazy-mmdb
+      - /opt/lazy-dns:/root/lazy-dns
     restart: unless-stopped
+
+networks:
+  internal:
+    driver: bridge
