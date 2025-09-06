@@ -81,11 +81,30 @@ impl DnsResolver {
             (&zone_config.apex, &zone_config.country)
         };
 
-        if let Some(geo_records) = self.get_geo_records(source_ip, geo_map).await {
-            return geo_records;
+        // --- FIX: Logic changed from replacement to merge/override ---
+        let mut final_records = default_records.clone();
+
+        if let Some(geo_overrides) = self.get_geo_records(source_ip, geo_map).await {
+            // Override fields only if they are present in the geo-specific config
+            if !geo_overrides.a.is_empty() {
+                final_records.a = geo_overrides.a;
+            }
+            if !geo_overrides.aaaa.is_empty() {
+                final_records.aaaa = geo_overrides.aaaa;
+            }
+            if !geo_overrides.cname.is_empty() {
+                final_records.cname = geo_overrides.cname;
+            }
+            if !geo_overrides.mx.is_empty() {
+                final_records.mx = geo_overrides.mx;
+            }
+            if !geo_overrides.txt.is_empty() {
+                final_records.txt = geo_overrides.txt;
+            }
+            // NS records are typically global and not overridden by GeoIP
         }
 
-        default_records.clone()
+        final_records
     }
 
     async fn get_geo_records(
@@ -174,10 +193,7 @@ impl DnsResolver {
         values
             .iter()
             .filter_map(|val| Name::from_str(val).ok())
-            .map(|ns_name| {
-                // FIX: Changed to use NS() directly for consistency
-                Record::from_rdata(name.clone(), ttl, RData::NS(NS(ns_name)))
-            })
+            .map(|ns_name| Record::from_rdata(name.clone(), ttl, RData::NS(NS(ns_name))))
             .collect()
     }
 
