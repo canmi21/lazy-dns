@@ -1,6 +1,6 @@
 [package]
 name = "lazy-dns"
-version = "1.0.11"
+version = "1.0.12"
 edition = "2024"
 description = "A lazy DNS server with GeoIP routing. Only SOA, NS, A, AAAA, CNAME, MX, and TXT are supported; everything else is dropped, by design."
 license = "MIT"
