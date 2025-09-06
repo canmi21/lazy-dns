@@ -1,9 +1,12 @@
 /* src/dns_server.rs */
 
+use crate::config::UnconfiguredPolicy;
 use crate::resolver::DnsResolver;
 use fancy_log::{LogLevel, log};
 use hickory_proto::op::{Message, MessageType, OpCode, ResponseCode};
+use hickory_proto::rr::{RData, Record, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -56,30 +59,92 @@ async fn handle_request(
 
     let mut response = Message::from(request.clone());
     response.set_message_type(MessageType::Response);
-    response.set_authoritative(true); // We are authoritative for our zones.
+    response.set_authoritative(true);
 
-    if let Some(query) = request.queries().first() {
-        let answers = resolver.resolve(query, addr.ip()).await;
-        if answers.is_empty() {
-            response.set_response_code(ResponseCode::NXDomain); // Domain not found
-        } else {
-            for answer in answers {
-                response.add_answer(answer);
+    let query = match request.queries().first() {
+        Some(q) => q,
+        None => {
+            response.set_response_code(ResponseCode::FormErr);
+            return response.to_bytes().ok();
+        }
+    };
+
+    let answers = resolver.resolve(query, addr.ip()).await;
+
+    if answers.is_empty() {
+        match resolver.config().unconfigured_policy {
+            UnconfiguredPolicy::Drop => {
+                return None;
             }
-            response.set_response_code(ResponseCode::NoError);
+            UnconfiguredPolicy::Refused => {
+                response.set_response_code(ResponseCode::Refused);
+            }
+            UnconfiguredPolicy::NxDomain => {
+                if query.query_type() == RecordType::SOA {
+                    response.set_response_code(ResponseCode::NoError);
+                } else {
+                    response.set_response_code(ResponseCode::NXDomain);
+                }
+            }
         }
+        log(
+            LogLevel::Info,
+            &format!(
+                "{} inquiry {} -> {}",
+                addr.ip(),
+                query.name(),
+                response.response_code()
+            ),
+        );
     } else {
-        response.set_response_code(ResponseCode::FormErr); // No queries in request
+        let records_str = format_records(&answers);
+        log(
+            LogLevel::Info,
+            &format!("{} inquiry {} get {}", addr.ip(), query.name(), records_str),
+        );
+
+        for answer in answers {
+            response.add_answer(answer);
+        }
+        response.set_response_code(ResponseCode::NoError);
     }
 
-    match response.to_bytes() {
-        Ok(bytes) => Some(bytes),
-        Err(e) => {
-            log(
-                LogLevel::Error,
-                &format!("Failed to serialize response: {}", e),
-            );
-            None
+    response.to_bytes().ok()
+}
+
+/// Helper function to format DNS records into a concise string for logging.
+fn format_records(records: &[Record]) -> String {
+    if records.is_empty() {
+        return "[]".to_string();
+    }
+
+    let mut grouped = BTreeMap::<RecordType, Vec<String>>::new();
+
+    for record in records {
+        let rdata = record.data();
+        let maybe_value = match rdata {
+            RData::A(addr) => Some(addr.to_string()),
+            RData::AAAA(addr) => Some(addr.to_string()),
+            RData::CNAME(name) => Some(name.to_string().trim_end_matches('.').to_string()),
+            RData::MX(mx) => Some(format!("{} {}", mx.preference(), mx.exchange())),
+            RData::NS(name) => Some(name.to_string()),
+            RData::SOA(soa) => Some(soa.mname().to_string()),
+            RData::TXT(txt) => Some(txt.to_string()),
+            _ => None, // For other record types, we produce nothing
+        };
+
+        if let Some(value) = maybe_value {
+            grouped.entry(record.record_type()).or_default().push(value);
         }
     }
+
+    if grouped.is_empty() {
+        return "[]".to_string();
+    }
+
+    grouped
+        .iter()
+        .map(|(rtype, vals)| format!("{} [{}]", rtype, vals.join(", ")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
