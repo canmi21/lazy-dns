@@ -5,8 +5,9 @@ use crate::geoip::GeoIpClient;
 use crate::records::{RecordSet, ZoneConfig};
 use fancy_log::{LogLevel, log};
 use hickory_proto::op::Query;
-use hickory_proto::rr::rdata::{self, A, AAAA, CNAME, MX, SOA, TXT};
+use hickory_proto::rr::rdata::{A, AAAA, CNAME, MX, NS, SOA, TXT};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
+use rand::seq::SliceRandom;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -77,7 +78,6 @@ impl DnsResolver {
                 return RecordSet::default();
             }
         } else {
-            // Use the explicit 'apex' field for apex queries
             (&zone_config.apex, &zone_config.country)
         };
 
@@ -174,24 +174,33 @@ impl DnsResolver {
         values
             .iter()
             .filter_map(|val| Name::from_str(val).ok())
-            .map(|ns_name| Record::from_rdata(name.clone(), ttl, RData::NS(rdata::NS(ns_name))))
+            .map(|ns_name| {
+                // FIX: Changed to use NS() directly for consistency
+                Record::from_rdata(name.clone(), ttl, RData::NS(NS(ns_name)))
+            })
             .collect()
     }
 
     fn create_a_records(&self, name: &Name, ttl: u32, values: &[String]) -> Vec<Record> {
-        values
+        let mut records: Vec<_> = values
             .iter()
             .filter_map(|val| val.parse::<Ipv4Addr>().ok())
             .map(|ip| Record::from_rdata(name.clone(), ttl, RData::A(A::from(ip))))
-            .collect()
+            .collect();
+
+        records.shuffle(&mut rand::thread_rng());
+        records
     }
 
     fn create_aaaa_records(&self, name: &Name, ttl: u32, values: &[String]) -> Vec<Record> {
-        values
+        let mut records: Vec<_> = values
             .iter()
             .filter_map(|val| val.parse::<Ipv6Addr>().ok())
             .map(|ip| Record::from_rdata(name.clone(), ttl, RData::AAAA(AAAA::from(ip))))
-            .collect()
+            .collect();
+
+        records.shuffle(&mut rand::thread_rng());
+        records
     }
 
     fn create_cname_records(&self, name: &Name, ttl: u32, values: &[String]) -> Vec<Record> {
