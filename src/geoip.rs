@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, sleep};
 
 fn get_socket_path() -> String {
-    env::var("GEOIP_SOCKET_PATH").unwrap_or_else(|_| "/tmp/lazy-mmdb.sock".to_string())
+    env::var("GEOIP_SOCKET_PATH").unwrap_or_else(|_| "/tmp/lazy-mmdb/lazy-mmdb.sock".to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,54 +45,50 @@ impl GeoIpClient {
                 .unwrap_or(300);
             let check_interval = Duration::from_secs(reconnect_secs);
             let socket_path = get_socket_path();
-            let mut first_run = true;
 
             loop {
-                if !first_run {
-                    sleep(check_interval).await;
-                }
-                first_run = false;
-
                 let mut current_status = is_available.lock().await;
                 match UnixStream::connect(&socket_path).await {
                     Ok(_) => {
                         if !*current_status {
                             log(
                                 LogLevel::Info,
-                                "lazy-mmdb service is available. GeoIP enabled.",
+                                "GeoIP service is available (connected to lazy-mmdb successfully).",
                             );
                             *current_status = true;
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
                         if *current_status {
                             log(
                                 LogLevel::Warn,
-                                "lazy-mmdb service has become unavailable. GeoIP disabled.",
+                                "GeoIP service has become unavailable (connection lost).",
                             );
                             *current_status = false;
                         } else {
                             log(
-                                LogLevel::Debug,
+                                LogLevel::Warn,
                                 &format!(
-                                    "lazy-mmdb still unavailable. Retrying in {:?}",
-                                    check_interval
+                                    "GeoIP service is unavailable (failed to connect: {}). Retrying in {:?}...",
+                                    e, check_interval
                                 ),
                             );
                         }
                     }
                 }
+
+                drop(current_status);
+                sleep(check_interval).await;
             }
         });
     }
 
     pub async fn lookup(&self, ip: IpAddr) -> Option<String> {
-        let socket_path = get_socket_path();
-
         if !*self.is_available.lock().await {
             return None;
         }
 
+        let socket_path = get_socket_path();
         let mut stream = match UnixStream::connect(&socket_path).await {
             Ok(s) => s,
             Err(_) => {
@@ -100,7 +96,7 @@ impl GeoIpClient {
                 if *avail {
                     log(
                         LogLevel::Warn,
-                        "Failed to connect to lazy-mmdb for lookup. Marking as unavailable.",
+                        "Failed a lookup connection to lazy-mmdb. Marking as unavailable.",
                     );
                     *avail = false;
                 }
