@@ -9,34 +9,84 @@ use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::UdpSocket;
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
+/// Runs both the UDP and TCP DNS servers concurrently.
 pub async fn run_server(
     bind_addr: &str,
     resolver: Arc<DnsResolver>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let socket = Arc::new(UdpSocket::bind(bind_addr).await?);
-    let mut buf = [0; 512];
+    // Bind both UDP and TCP listeners to the same address
+    let udp_socket = Arc::new(UdpSocket::bind(bind_addr).await?);
+    let tcp_listener = TcpListener::bind(bind_addr).await?;
+
+    log(
+        LogLevel::Info,
+        &format!("DNS server listening for UDP and TCP on {}", bind_addr),
+    );
+
+    // Buffer for incoming UDP packets
+    let mut udp_buf = [0; 512];
 
     loop {
-        let (len, addr) = socket.recv_from(&mut buf).await?;
-        let socket = socket.clone();
-        let resolver = resolver.clone();
-        let request_data = buf[..len].to_vec();
+        // Use tokio::select! to handle the first available event from either socket
+        tokio::select! {
+            // Handle incoming UDP packets
+            Ok((len, addr)) = udp_socket.recv_from(&mut udp_buf) => {
+                let data = udp_buf[..len].to_vec();
+                let resolver_clone = resolver.clone();
+                let udp_socket_clone = udp_socket.clone();
 
-        tokio::spawn(async move {
-            if let Some(response_bytes) = handle_request(request_data, addr, resolver).await {
-                if let Err(e) = socket.send_to(&response_bytes, addr).await {
-                    log(
-                        LogLevel::Error,
-                        &format!("Failed to send response to {}: {}", addr, e),
-                    );
-                }
-            }
-        });
+                tokio::spawn(async move {
+                    if let Some(response_bytes) = handle_request(data, addr, resolver_clone).await {
+                        if let Err(e) = udp_socket_clone.send_to(&response_bytes, addr).await {
+                            log(LogLevel::Error, &format!("Failed to send UDP response to {}: {}", addr, e));
+                        }
+                    }
+                });
+            },
+
+            // Handle incoming TCP connections
+            Ok((stream, addr)) = tcp_listener.accept() => {
+                let resolver_clone = resolver.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_tcp_connection(stream, addr, resolver_clone).await {
+                        log(LogLevel::Warn, &format!("TCP connection error from {}: {}", addr, e));
+                    }
+                });
+            },
+        }
     }
 }
 
+/// Handles a single TCP connection, including message framing.
+async fn handle_tcp_connection(
+    mut stream: TcpStream,
+    addr: SocketAddr,
+    resolver: Arc<DnsResolver>,
+) -> io::Result<()> {
+    // DNS over TCP messages are prefixed with a 2-byte length field
+    let mut len_buf = [0u8; 2];
+    stream.read_exact(&mut len_buf).await?;
+    let len = u16::from_be_bytes(len_buf) as usize;
+
+    // Read the full DNS query message
+    let mut req_buf = vec![0u8; len];
+    stream.read_exact(&mut req_buf).await?;
+
+    // Process the request using the same shared handler
+    if let Some(res_buf) = handle_request(req_buf, addr, resolver).await {
+        // Prepend the response with its 2-byte length and send it back
+        let res_len = res_buf.len() as u16;
+        stream.write_all(&res_len.to_be_bytes()).await?;
+        stream.write_all(&res_buf).await?;
+    }
+    // The stream is dropped here, closing the connection.
+    Ok(())
+}
+
+/// The core request handler, protocol-agnostic.
 async fn handle_request(
     data: Vec<u8>,
     addr: SocketAddr,
